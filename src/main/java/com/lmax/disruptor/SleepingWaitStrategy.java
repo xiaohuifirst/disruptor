@@ -27,6 +27,11 @@ import java.util.concurrent.locks.LockSupport;
  * Latency spikes can occur after quiet periods.  It will also reduce the impact
  * on the producing thread as it will not need signal any conditional variables
  * to wake up the event handling thread.
+ *
+ * 这个策略应该是最好用的？？？
+ * Disruptor官网例子使用的策略是 SleepingWaitStrategy ，这个类的策略是当没有新数据写入RingBuffer时，
+ * 每1ns检查一次RingBuffer cursor。1ns！跟死循环没什么区别，因此CPU暴高。
+ * 改成每100ms检查一次，CPU立刻降为7.8%。
  */
 public final class SleepingWaitStrategy implements WaitStrategy
 {
@@ -76,17 +81,22 @@ public final class SleepingWaitStrategy implements WaitStrategy
     private int applyWaitMethod(final SequenceBarrier barrier, int counter)
         throws AlertException
     {
+        // 检测是否需要终止
         barrier.checkAlert();
 
+        // 如果再100到200之间，重试
         if (counter > 100)
         {
             --counter;
         }
+        // 如果在100到0之间，调用Thread.yield()让出cpu
         else if (counter > 0)
         {
             --counter;
+            // 屈服，放弃
             Thread.yield();
         }
+        // <0的话，利用LockSupport.parkNanos(sleepTimeNs)来sleep最小时间（一般1纳秒最好）
         else
         {
             LockSupport.parkNanos(sleepTimeNs);

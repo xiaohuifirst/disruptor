@@ -59,6 +59,7 @@ public interface SequenceBarrier
 
     /**
      * Check if an alert has been raised and throw an {@link AlertException} if it has.
+     * 检测停止信号
      *
      * @throws AlertException if alert has been raised.
      */

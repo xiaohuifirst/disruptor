@@ -28,36 +28,53 @@ abstract class RingBufferPad
 
 abstract class RingBufferFields<E> extends RingBufferPad
 {
+    // Buffer数组填充
     private static final int BUFFER_PAD;
+    // Buffer数组起始基址
     private static final long REF_ARRAY_BASE;
+    // 2^n 每个数组对象引用所占空间，这个n就是REF_ELEMENT_SHIFT
     private static final int REF_ELEMENT_SHIFT;
     private static final Unsafe UNSAFE = Util.getUnsafe();
 
+    // 一般现在的电脑CPU缓存行是64字节
     static
     {
+        // 指针类型的长度
+        // Object数组引用长度，32位为4字节，64位为8字节
         final int scale = UNSAFE.arrayIndexScale(Object[].class);
-        if (4 == scale)
+        if (4 == scale)     // 32bit机器
         {
             REF_ELEMENT_SHIFT = 2;
         }
-        else if (8 == scale)
+        else if (8 == scale)    // 64bit机器
         {
             REF_ELEMENT_SHIFT = 3;
         }
         else
         {
-            throw new IllegalStateException("Unknown pointer size");
+            throw new IllegalStateException("Unknown pointer size");    // 不知道多少位
         }
-        BUFFER_PAD = 128 / scale;
+        // 需要填充128字节，两个缓冲行长度是128字节
+        BUFFER_PAD = 128 / scale;       // 64bit机器是16
         // Including the buffer pad in the array base offset
+        // 数组起始地址+填充的128字节
+        // BUFFER_PAD左移运算后，又变成了128！！！
         REF_ARRAY_BASE = UNSAFE.arrayBaseOffset(Object[].class) + (BUFFER_PAD << REF_ELEMENT_SHIFT);
     }
 
     private final long indexMask;
+    // 保存整个RingBuffer每个槽（entry或者slot）的Event对象
+    // 这些对象只在RingBuffer初始化时被建立，之后就是修改这些对象（初始化Event和填充Event），并不会重新建立新的对象
+    //================因为entries里的对象会被多线程频繁访问，但不会被修改（因为这个数组保存的是对象的具体应用，是不会变的）
+    //================但是我们需要避免这些对象与可以被修改的其他对象读取到同一个缓存行，避免缓存行失效重新读取
+    //================因此，需要对entries数组的开始和结尾部分进行缓存行的填充！具体应该是填充64字节？还是128字节？
     private final Object[] entries;
     protected final int bufferSize;
+    // 队列头，用来协调生产者向RingBuffer中填充数据。
+    // 表示队列尾的Sequence并没有在RingBuffer中，而是由消费者维护。
     protected final Sequencer sequencer;
 
+    // 包内可见的构造函数，用户不可用！
     RingBufferFields(
         EventFactory<E> eventFactory,
         Sequencer sequencer)
@@ -74,8 +91,22 @@ abstract class RingBufferFields<E> extends RingBufferPad
             throw new IllegalArgumentException("bufferSize must be a power of 2");
         }
 
+        // m % 2^n  <=>  m & (2^n - 1)
         this.indexMask = bufferSize - 1;
+        /**
+         * 结构：缓存行填充，避免频繁访问的任一entry与另一被修改的无关变量写入同一缓存行
+         * ----------------
+         * *   数组头   * BASE
+         * *   Padding  * 128字节
+         * * reference1 * SCALE
+         * * reference2 * SCALE
+         * * reference3 * SCALE
+         * ............
+         * *   Padding  * 128字节
+         * -----------------
+         */
         this.entries = new Object[sequencer.getBufferSize() + 2 * BUFFER_PAD];
+        //利用eventFactory初始化RingBuffer的每个槽的event
         fill(eventFactory);
     }
 
@@ -90,6 +121,8 @@ abstract class RingBufferFields<E> extends RingBufferPad
     @SuppressWarnings("unchecked")
     protected final E elementAt(long sequence)
     {
+        // 数组起始位置+ （槽数 << REF_ELEMENT_SHIFT   <==>   槽数*scale）
+        // （数组基址+数组头+引用偏移）
         return (E) UNSAFE.getObject(entries, REF_ARRAY_BASE + ((sequence & indexMask) << REF_ELEMENT_SHIFT));
     }
 }
@@ -97,6 +130,15 @@ abstract class RingBufferFields<E> extends RingBufferPad
 /**
  * Ring based store of reusable entries containing the data representing
  * an event being exchanged between event producer and {@link EventProcessor}s.
+ *
+ * EventSink代表RingBuffer是一个以Event槽为基础的数据结构。
+ * 同时实现EventSequencer和EventSink代表RingBuffer是一个以Event槽为基础元素保存的数据结构。
+ * EventSink接口的主要方法都是发布Event：
+ * 发布一个Event的流程是：申请下一个Sequence->申请成功则获取对应槽的Event->初始化并填充对应槽的Event->发布Event。
+ * 初始化，填充Event是通过实现EventTranslator，EventTranslatorOneArg，EventTranslatorTwoArg，
+ * EventTranslatorThreeArg，EventTranslatorVararg这些EventTranslator来做的
+ *
+ * 用户组装一个RingBuffer需要如下元素：实现EventFactory的Event的工厂，实现Sequencer的生产者，等待策略waitStrategy还有bufferSize。
  *
  * @param <E> implementation storing the data for sharing during exchange or parallel coordination of an event.
  */
@@ -107,6 +149,7 @@ public final class RingBuffer<E> extends RingBufferFields<E> implements Cursored
 
     /**
      * Construct a RingBuffer with the full option set.
+     * 包内可见的构造函数，用户不可用！
      *
      * @param eventFactory to newInstance entries for filling the RingBuffer
      * @param sequencer    sequencer to handle the ordering of events moving through the RingBuffer.
@@ -121,6 +164,7 @@ public final class RingBuffer<E> extends RingBufferFields<E> implements Cursored
 
     /**
      * Create a new multiple producer RingBuffer with the specified wait strategy.
+     * 用户可以直接调用的静态方法构造RingBuffer
      *
      * @param <E> Class of the event stored in the ring buffer.
      * @param factory      used to create the events within the ring buffer.
@@ -193,6 +237,7 @@ public final class RingBuffer<E> extends RingBufferFields<E> implements Cursored
 
     /**
      * Create a new Ring Buffer with the specified producer type (SINGLE or MULTI)
+     * 用户组装一个RingBuffer需要如下元素：实现EventFactory的Event的工厂，实现Sequencer的生产者，等待策略waitStrategy还有bufferSize。
      *
      * @param <E> Class of the event stored in the ring buffer.
      * @param producerType producer type to use {@link ProducerType}.
@@ -233,6 +278,14 @@ public final class RingBuffer<E> extends RingBufferFields<E> implements Cursored
      *
      * @param sequence for the event
      * @return the event for the given sequence
+     *
+     * 继承自DataProvider接口
+     * 获取某个sequence对应的对象，对象类型在这里是抽象的（T）。
+     * 翻译：：：：：：：：：：：
+     * 两个地方会使用：
+     * 1、生产时，生产者在next之后先获取这个预先分配好的event 对象，向这个对象里面写（更新）数据，
+     * 最后调用publish（可参考log4j2的Asynchronous Loggers）
+     * 2、在从ring buffer中消费数据的时候。在调用SequenceBarrier.waitFor(long)时使用了这个方法
      */
     @Override
     public E get(long sequence)
@@ -458,6 +511,12 @@ public final class RingBuffer<E> extends RingBufferFields<E> implements Cursored
 
     /**
      * @see com.lmax.disruptor.EventSink#publishEvent(com.lmax.disruptor.EventTranslator)
+     * EventTranslator用于将需要传递的数据转换并写入从RingBuffer中申请到的event里面。
+     * 他们由生产者用户实现，将Event初始化并填充。在发布一条Event的时候，
+     * 这些Translator的translate方法会被调用，在translate方法初始化并填充Event。
+     *
+     * EventSink接口是用来发布Event的，在发布的同时，调用绑定的Translator来初始化并填充Event。
+     * EventSink接口的大部分方法接受不同的Translator来处理Event：
      */
     @Override
     public void publishEvent(EventTranslator<E> translator)

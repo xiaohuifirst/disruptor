@@ -21,6 +21,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>A {@link WorkProcessor} wraps a single {@link WorkHandler}, effectively consuming the sequence
  * and ensuring appropriate barriers.</p>
  *
+ * 利用它，可以实现互斥消费，同样的利用SequenceBarrier可以实现消费顺序
+ *
  * <p>Generally, this will be used as part of a {@link WorkerPool}.</p>
  *
  * @param <T> event implementation storing the details for the work to processed.
@@ -121,19 +123,16 @@ public final class WorkProcessor<T>
         {
             try
             {
-                // if previous sequence was processed - fetch the next sequence and set
-                // that we have successfully processed the previous sequence
-                // typically, this will be true
-                // this prevents the sequence getting too far forward if an exception
-                // is thrown from the WorkHandler
                 if (processedSequence)
                 {
                     processedSequence = false;
+                    // 获取下一个可以消费的Sequence
                     do
                     {
                         nextSequence = workSequence.get() + 1L;
                         sequence.set(nextSequence - 1L);
                     }
+                    // 多个WorkProcessor之间，如果共享一个workSequence，那么，可以实现互斥消费，因为只有一个线程可以CAS更新成功
                     while (!workSequence.compareAndSet(nextSequence - 1L, nextSequence));
                 }
 

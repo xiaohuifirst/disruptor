@@ -196,6 +196,8 @@ public class Disruptor<T>
      * <p>Set up custom event processors to handle events from the ring buffer. The Disruptor will
      * automatically start this processors when {@link #start()} is called.</p>
      *
+     * 非互斥消费
+     *
      * <p>This method can be used as the start of a chain. For example if the processor <code>A</code> must
      * process events before handler <code>B</code>:</p>
      * <pre><code>dw.handleEventsWith(A).then(B);</code></pre>
@@ -226,6 +228,8 @@ public class Disruptor<T>
      * Set up a {@link WorkerPool} to distribute an event to one of a pool of work handler threads.
      * Each event will only be processed by one of the work handlers.
      * The Disruptor will automatically start this processors when {@link #start()} is called.
+     *
+     * 互斥消费
      *
      * @param workHandlers the work handlers that will process events.
      * @return a {@link EventHandlerGroup} that can be used to chain dependencies.
@@ -271,6 +275,8 @@ public class Disruptor<T>
     /**
      * Override the default exception handler for a specific handler.
      * <pre>disruptorWizard.handleExceptionsIn(eventHandler).with(exceptionHandler);</pre>
+     *
+     * 用法见上面提示
      *
      * @param eventHandler the event handler to set a different exception handler for.
      * @return an ExceptionHandlerSetting dsl object - intended to be used by chaining the with method call.

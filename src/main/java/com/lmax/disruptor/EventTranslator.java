@@ -18,6 +18,8 @@ package com.lmax.disruptor;
 /**
  * <p>Implementations translate (write) data representations into events claimed from the {@link RingBuffer}.</p>
  *
+ * 将数据转换并写入从RingBuffer中申请到的event！
+ *
  * <p>When publishing to the RingBuffer, provide an EventTranslator. The RingBuffer will select the next available
  * event by sequence and provide it to the EventTranslator (which should update the event), before publishing
  * the sequence update.</p>

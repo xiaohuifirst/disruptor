@@ -8,7 +8,10 @@ public interface EventSink<E>
      * event from the ring buffer and publishing the claimed sequence
      * after translation.
      *
+     * 申请下一个Sequence->申请成功则获取对应槽的Event->利用translator初始化并填充对应槽的Event->发布Event
+     *
      * @param translator The user specified translation for the event
+     *                   用户实现，用于初始化Event，这里是不带参数Translator
      */
     void publishEvent(EventTranslator<E> translator);
 
@@ -18,6 +21,9 @@ public interface EventSink<E>
      * event from the ring buffer and publishing the claimed sequence
      * after translation.  Will return false if specified capacity
      * was not available.
+     *
+     * 尝试申请下一个Sequence->申请成功则获取对应槽的Event->利用translator初始化并填充对应槽的Event->发布Event
+     * 若空间不足，则立即失败返回
      *
      * @param translator The user specified translation for the event
      * @return true if the value was published, false if there was insufficient
@@ -133,6 +139,8 @@ public interface EventSink<E>
      * buffer will be a field (either explicitly or captured anonymously),
      * therefore this call will require an instance of the translator
      * for each value that is to be inserted into the ring buffer.</p>
+     *
+     * 申请多个Sequence->申请成功则获取对应槽的Event->利用每个translator初始化并填充每个对应槽的Event->发布Event
      *
      * @param translators The user specified translation for each event
      */

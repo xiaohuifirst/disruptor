@@ -23,6 +23,8 @@ package com.lmax.disruptor;
  * device; after the operation has completed, the implementation should call {@link Sequence#set} to update the
  * sequence and allow other processes that are dependent on this handler to progress.
  *
+ * 批量写IO等类似条件下使用，当前更新之后，依赖这个sequence的消费者才能使用！
+ *
  * @param <T> event implementation storing the data for sharing during exchange or parallel coordination of an event.
  */
 public interface SequenceReportingEventHandler<T>

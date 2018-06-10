@@ -27,12 +27,17 @@ import com.lmax.disruptor.util.Util;
  */
 public abstract class AbstractSequencer implements Sequencer
 {
+    // 用来原子更新gatingSequences 的工具类
     private static final AtomicReferenceFieldUpdater<AbstractSequencer, Sequence[]> SEQUENCE_UPDATER =
         AtomicReferenceFieldUpdater.newUpdater(AbstractSequencer.class, Sequence[].class, "gatingSequences");
 
+    // 记录生产目标RingBuffer的大小
     protected final int bufferSize;
+    // 表示这个生产者的等待策略
     protected final WaitStrategy waitStrategy;
+    // 生产定位，初始为-1
     protected final Sequence cursor = new Sequence(Sequencer.INITIAL_CURSOR_VALUE);
+    // 需要跟踪处理的sequences（标记消费者消费的位置！）
     protected volatile Sequence[] gatingSequences = new Sequence[0];
 
     /**
@@ -43,6 +48,8 @@ public abstract class AbstractSequencer implements Sequencer
      */
     public AbstractSequencer(int bufferSize, WaitStrategy waitStrategy)
     {
+        // bufferSize不能小于1并且bufferSize必须是2的n次方
+        // 为了简化取余定位操作：m % 2^n = m & ( 2^n - 1 )
         if (bufferSize < 1)
         {
             throw new IllegalArgumentException("bufferSize must not be less than 1");
@@ -80,6 +87,7 @@ public abstract class AbstractSequencer implements Sequencer
     @Override
     public final void addGatingSequences(Sequence... gatingSequences)
     {
+        // 原子更新
         SequenceGroups.addSequences(this, SEQUENCE_UPDATER, this, gatingSequences);
     }
 
@@ -89,6 +97,7 @@ public abstract class AbstractSequencer implements Sequencer
     @Override
     public boolean removeGatingSequence(Sequence sequence)
     {
+        // 原子更新
         return SequenceGroups.removeSequence(this, SEQUENCE_UPDATER, sequence);
     }
 
@@ -103,6 +112,11 @@ public abstract class AbstractSequencer implements Sequencer
 
     /**
      * @see Sequencer#newBarrier(Sequence...)
+     * 用来协调消费者消费的对象。例如消费者A依赖于消费者B，
+     * 就是消费者A一定要后于消费者B消费，即A只能消费B消费过的，
+     * 也就是A的sequence一定要小于B的。这个Sequence的协调，
+     * 通过A和B设置在同一个SequenceBarrier上实现。
+     * 同时，我们还要保证所有的消费者只能消费被Publish过的。
      */
     @Override
     public SequenceBarrier newBarrier(Sequence... sequencesToTrack)

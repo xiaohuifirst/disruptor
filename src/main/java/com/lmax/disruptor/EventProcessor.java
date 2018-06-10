@@ -22,6 +22,9 @@ package com.lmax.disruptor;
  * instance.
  * <p>
  * An EventProcessor will generally be associated with a Thread for execution.
+ *
+ * 通过SequenceBarrier，我们可以实现消费之间的依赖关系，
+ * 但是，消费方式（比如广播，群组消费等等），需要通过EventProcessor的实现类实现
  */
 public interface EventProcessor extends Runnable
 {

@@ -1,5 +1,12 @@
 package com.lmax.disruptor;
 
+/**
+ * 实现此接口类，可以理解为，实现一个有序的存储结构，
+ * 也就是RingBuffer的一个特性。
+ * 一个Producer，在生产Event时，先获取下一位置的Sequence，
+ * 之后填充Event，填充好后再publish，这之后，
+ * 这个Event就可以被消费处理了
+ */
 public interface Sequenced
 {
     /**
@@ -35,6 +42,7 @@ public interface Sequenced
     /**
      * Claim the next n events in sequence for publishing.  This is for batch event producing.  Using batch producing
      * requires a little care and some math.
+     * 申请下一个或者n个sequence(value)作为生产event的位置
      * <pre>
      * int n = 10;
      * long hi = sequencer.next(n);
@@ -65,6 +73,8 @@ public interface Sequenced
      * highest numbered slot if there is at least <code>requiredCapacity</code> slots
      * available.  Have a look at {@link Sequencer#next()} for a description on how to
      * use this method.
+     * 尝试申请下一个或者n个sequence(value)作为生产event的位置，
+     * 容量不足会抛出InsufficientCapacityException
      *
      * @param n the number of sequences to claim
      * @return the claimed sequence value

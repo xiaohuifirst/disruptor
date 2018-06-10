@@ -29,4 +29,6 @@ public interface Cursored
      * @return current cursor value
      */
     long getCursor();
+
+    // 生产者在生产消息时，需要知道当前ringBuffer下一个生产的位置，这个位置需要更新，每次更新，需要访问getCursor来定位
 }

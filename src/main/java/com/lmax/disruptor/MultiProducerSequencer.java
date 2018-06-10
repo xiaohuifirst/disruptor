@@ -33,15 +33,22 @@ import com.lmax.disruptor.util.Util;
 public final class MultiProducerSequencer extends AbstractSequencer
 {
     private static final Unsafe UNSAFE = Util.getUnsafe();
+    // 数组首元素地址
     private static final long BASE = UNSAFE.arrayBaseOffset(int[].class);
+    // 步长
     private static final long SCALE = UNSAFE.arrayIndexScale(int[].class);
 
+    // gatingSequence的缓存，和之前的单一生产者的类似
     private final Sequence gatingSequenceCache = new Sequence(Sequencer.INITIAL_CURSOR_VALUE);
 
     // availableBuffer tracks the state of each ringbuffer slot
     // see below for more details on the approach
+    // 每个槽存过几个Event，就是sequence到底转了多少圈，存在这个数组里，下标就是每个槽。
+    // 为什么不直接将sequence存入availableBuffer，因为这样sequence值会过大，很容易溢出.
     private final int[] availableBuffer;
+    // 利用对2^n取模 = 对2^n -1 取与运算原理，indexMask=bufferSize - 1
     private final int indexMask;
+    // 就是上面的n，用来定位某个sequence到底转了多少圈，用来标识已被发布的sequence。
     private final int indexShift;
 
     /**
@@ -55,6 +62,7 @@ public final class MultiProducerSequencer extends AbstractSequencer
         super(bufferSize, waitStrategy);
         availableBuffer = new int[bufferSize];
         indexMask = bufferSize - 1;
+        // 对2取对数
         indexShift = Util.log2(bufferSize);
         initialiseAvailableBuffer();
     }
@@ -70,14 +78,20 @@ public final class MultiProducerSequencer extends AbstractSequencer
 
     private boolean hasAvailableCapacity(Sequence[] gatingSequences, final int requiredCapacity, long cursorValue)
     {
+        // 下一位置加上所需容量减去整个bufferSize，如果为正数，就证明至少转了一圈
+        // 那么需要检查gatingSequences(由消费者更新里面的Sequence值)以保证不覆盖还未被消费的消息
+        // 由于最多只能生产不大于整个bufferSize的Events，所以减去一个bufferSize与最小的sequence比较即可
         long wrapPoint = (cursorValue + requiredCapacity) - bufferSize;
+        // 读取缓存的值
         long cachedGatingSequence = gatingSequenceCache.get();
 
+        // 缓存失效的条件（见SingleProducerSequencer）
         if (wrapPoint > cachedGatingSequence || cachedGatingSequence > cursorValue)
         {
             long minSequence = Util.getMinimumSequence(gatingSequences, cursorValue);
             gatingSequenceCache.set(minSequence);
 
+            // 空间不足
             if (wrapPoint > minSequence)
             {
                 return false;
@@ -107,6 +121,7 @@ public final class MultiProducerSequencer extends AbstractSequencer
 
     /**
      * @see Sequencer#next(int)
+     * 用于多个生产者枪战n个RingBuffer的槽slot，用于生产Event.
      */
     @Override
     public long next(int n)
@@ -121,24 +136,32 @@ public final class MultiProducerSequencer extends AbstractSequencer
 
         do
         {
+            // 首先根据缓存判断空间是否足够
             current = cursor.get();
             next = current + n;
 
             long wrapPoint = next - bufferSize;
             long cachedGatingSequence = gatingSequenceCache.get();
 
+            // 如果缓存不满足
             if (wrapPoint > cachedGatingSequence || cachedGatingSequence > current)
             {
+                // 重新获取最小的Sequence
                 long gatingSequence = Util.getMinimumSequence(gatingSequences, current);
 
+                // 如果空间不足，则唤醒消费者消费，并让出CPU
                 if (wrapPoint > gatingSequence)
                 {
+                    // hhp added.
+                    //waitStrategy.signalAllWhenBlocking();
                     LockSupport.parkNanos(1); // TODO, should we spin based on the wait strategy?
                     continue;
                 }
 
+                // 更新缓存值
                 gatingSequenceCache.set(gatingSequence);
-            }
+            }   // 如果空间足够，尝试CAS更新cursor，更新cursor成功代表成功获取到了n个槽，退出循环
+            // 否则继续进行循环CAS
             else if (cursor.compareAndSet(current, next))
             {
                 break;
@@ -146,6 +169,7 @@ public final class MultiProducerSequencer extends AbstractSequencer
         }
         while (true);
 
+        // 返回最新的cursor值
         return next;
     }
 
@@ -160,6 +184,7 @@ public final class MultiProducerSequencer extends AbstractSequencer
 
     /**
      * @see Sequencer#tryNext(int)
+     * 多个生产者尝试抢占n个槽
      */
     @Override
     public long tryNext(int n) throws InsufficientCapacityException
@@ -172,6 +197,7 @@ public final class MultiProducerSequencer extends AbstractSequencer
         long current;
         long next;
 
+        // 尝试获取一次，若不成功，则抛出InsufficientCapacityException
         do
         {
             current = cursor.get();
@@ -179,6 +205,7 @@ public final class MultiProducerSequencer extends AbstractSequencer
 
             if (!hasAvailableCapacity(gatingSequences, n, current))
             {
+                // 跳出循环
                 throw InsufficientCapacityException.INSTANCE;
             }
         }
@@ -210,6 +237,7 @@ public final class MultiProducerSequencer extends AbstractSequencer
 
     /**
      * @see Sequencer#publish(long)
+     * 配置好Event后，发布public该sequence
      */
     @Override
     public void publish(final long sequence)
@@ -245,10 +273,17 @@ public final class MultiProducerSequencer extends AbstractSequencer
      * sequence as the index into the buffer (indexMask). (aka modulo operator)
      * -- The upper portion of the sequence becomes the value to check for availability.
      * ie: it tells us how many times around the ring buffer we've been (aka division)
-     * -- Because we can't wrap without the gating sequences moving forward (i.e. the
+     * -- Because we can't wrap(缠绕) without the gating sequences moving forward (i.e. the
      * minimum gating sequence is effectively our last available position in the
      * buffer), when we have new data and successfully claimed a slot we can simply
      * write over the top.
+     * 最后一句意思：当我们成功的为一个新的数据申请到槽以后，我们可以简单的在上面写！
+     * 原因1：我们限制了在最小的gatingSequence和cursor之间的差不能大于bufferSize（next函数保证了这一点）
+     * 原因2：publish时，计算出该sequence对应槽的位置和Flag（转了多少圈）之后，由于在next和publish中间，
+     * 我们不能越过最小的gatingSequences来再次申请这几个槽，所以这次写入这几个槽是安全的！！
+     *
+     * 发布某个sequence之前的都可以被消费了
+     * 这里需要将availableBuffer上对应sequence下标的值设置为第几次用到这个槽
      */
     private void setAvailable(final long sequence)
     {
@@ -257,6 +292,7 @@ public final class MultiProducerSequencer extends AbstractSequencer
 
     private void setAvailableBufferValue(int index, int flag)
     {
+        // 每个数组值的地址：Base + Scale*下标
         long bufferAddress = (index * SCALE) + BASE;
         UNSAFE.putOrderedInt(availableBuffer, bufferAddress, flag);
     }
@@ -270,6 +306,7 @@ public final class MultiProducerSequencer extends AbstractSequencer
         int index = calculateIndex(sequence);
         int flag = calculateAvailabilityFlag(sequence);
         long bufferAddress = (index * SCALE) + BASE;
+        // 判断该sequence号应该在的槽的上面的flag是否与计算出来的值相等（即这个号还没被转一圈覆盖掉）
         return UNSAFE.getIntVolatile(availableBuffer, bufferAddress) == flag;
     }
 
@@ -287,11 +324,17 @@ public final class MultiProducerSequencer extends AbstractSequencer
         return availableSequence;
     }
 
+    //某个sequence右移indexShift，代表这个Sequence是第几次用到这个ringBuffer的某个槽
+    // 也就是这个sequence转了多少圈
     private int calculateAvailabilityFlag(final long sequence)
     {
+        // 无符号右移，忽略符号位，空位都以0补齐
+        // 右移n次以后，得到的值是sequence/2^n，即转过了多少圈
         return (int) (sequence >>> indexShift);
     }
 
+    // 计算槽的位置
+    // 定位ringBuffer上某个槽用于生产event，对2^n取模 = 对2^n -1
     private int calculateIndex(final long sequence)
     {
         return ((int) sequence) & indexMask;

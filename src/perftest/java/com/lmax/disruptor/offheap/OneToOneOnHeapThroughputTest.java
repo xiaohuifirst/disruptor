@@ -21,6 +21,7 @@ public class OneToOneOnHeapThroughputTest extends AbstractPerfTestDisruptor
     private static final boolean SLICED_BUFFER = Boolean.getBoolean("sliced");
     private final Executor executor = Executors.newFixedThreadPool(1, DaemonThreadFactory.INSTANCE);
     private final WaitStrategy waitStrategy = new YieldingWaitStrategy();
+    // 一个生产者
     private final RingBuffer<ByteBuffer> buffer =
         RingBuffer.createSingleProducer(
             SLICED_BUFFER ? SlicedBufferFactory.direct(BLOCK_SIZE, BUFFER_SIZE) : BufferFactory.direct(BLOCK_SIZE),
@@ -56,6 +57,7 @@ public class OneToOneOnHeapThroughputTest extends AbstractPerfTestDisruptor
         final CountDownLatch latch = new CountDownLatch(1);
         long expectedCount = processor.getSequence().get() + ITERATIONS;
         handler.reset(latch, ITERATIONS);
+        // 一个消费者
         executor.execute(processor);
         long start = System.currentTimeMillis();
 

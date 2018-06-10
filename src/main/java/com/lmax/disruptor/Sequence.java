@@ -20,6 +20,7 @@ import sun.misc.Unsafe;
 import com.lmax.disruptor.util.Util;
 
 
+// 为了防止伪共享，填充缓存行（64bit）
 class LhsPadding
 {
     protected long p1, p2, p3, p4, p5, p6, p7;
@@ -46,6 +47,8 @@ class RhsPadding extends Value
 public class Sequence extends RhsPadding
 {
     static final long INITIAL_VALUE = -1L;
+    // Unsafe 类的用处：https://blog.csdn.net/zhxdick/article/details/52003123
+    // 获取Unsafe，通过Unsafe获取Sequence中的value的地址，根据这个地址CAS更新
     private static final Unsafe UNSAFE;
     private static final long VALUE_OFFSET;
 
@@ -54,6 +57,7 @@ public class Sequence extends RhsPadding
         UNSAFE = Util.getUnsafe();
         try
         {
+            //获取类的某个对象的某个field偏移地址(指针)
             VALUE_OFFSET = UNSAFE.objectFieldOffset(Value.class.getDeclaredField("value"));
         }
         catch (final Exception e)
@@ -94,6 +98,8 @@ public class Sequence extends RhsPadding
      * Perform an ordered write of this sequence.  The intent is
      * a Store/Store barrier between this write and any previous
      * store.
+     * 利用Unsafe更新value的地址内存上的值从而更新value的值
+     * 只有一个store/store屏障
      *
      * @param value The new value for the sequence.
      */
@@ -107,6 +113,8 @@ public class Sequence extends RhsPadding
      * a Store/Store barrier between this write and any previous
      * write and a Store/Load barrier between this write and any
      * subsequent volatile read.
+     * 利用Unsafe原子更新value
+     * 两种内存屏障，读的人看到是最新值，写的人看到的也是最新值
      *
      * @param value The new value for the sequence.
      */
@@ -117,6 +125,7 @@ public class Sequence extends RhsPadding
 
     /**
      * Perform a compare and set operation on the sequence.
+     * 利用Unsafe CAS
      *
      * @param expectedValue The expected current value.
      * @param newValue The value to update to.

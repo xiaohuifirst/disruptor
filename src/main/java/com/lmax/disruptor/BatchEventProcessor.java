@@ -25,6 +25,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * If the {@link EventHandler} also implements {@link LifecycleAware} it will be notified just after the thread
  * is started and just before the thread is shutdown.
  *
+ * BatchEventProcessor可以处理超时，可以处理中断，可以通过用户实现的异常处理类处理异常，
+ * 同时，发生异常之后再次启动，不会漏消费，也不会重复消费。
+ * 不同的BatchEventProcessor之间通过SequenceBarrier进行依赖消费。
+ *
  * @param <T> event implementation storing the data for sharing during exchange or parallel coordination of an event.
  */
 public final class BatchEventProcessor<T>
@@ -47,9 +51,12 @@ public final class BatchEventProcessor<T>
      * Construct a {@link EventProcessor} that will automatically track the progress by updating its sequence when
      * the {@link EventHandler#onEvent(Object, long, boolean)} method returns.
      *
-     * @param dataProvider    to which events are published.
-     * @param sequenceBarrier on which it is waiting.
-     * @param eventHandler    is the delegate to which events are dispatched.
+     * 构造一个消费者之间非互斥消费的消费者（消息被消费多次的情况）
+     *
+     * @param dataProvider    to which events are published. 对应的RingBuffer
+     * @param sequenceBarrier on which it is waiting. 依赖关系，通过构造不同的SequenceBarrier，
+     *                        用互相的dependentSequence，我们可以构造出先后消费关系
+     * @param eventHandler    is the delegate to which events are dispatched. 用户实现的处理消费的event的业务消费者
      */
     public BatchEventProcessor(
         final DataProvider<T> dataProvider,
@@ -60,13 +67,16 @@ public final class BatchEventProcessor<T>
         this.sequenceBarrier = sequenceBarrier;
         this.eventHandler = eventHandler;
 
+        // 消费完成后广播
         if (eventHandler instanceof SequenceReportingEventHandler)
         {
             ((SequenceReportingEventHandler<?>) eventHandler).setSequenceCallback(sequence);
         }
 
+        // 批处理开始回调
         batchStartAware =
             (eventHandler instanceof BatchStartAware) ? (BatchStartAware) eventHandler : null;
+        // 超时处理回调
         timeoutHandler =
             (eventHandler instanceof TimeoutHandler) ? (TimeoutHandler) eventHandler : null;
     }
@@ -93,6 +103,8 @@ public final class BatchEventProcessor<T>
     /**
      * Set a new {@link ExceptionHandler} for handling exceptions propagated out of the {@link BatchEventProcessor}
      *
+     * 这个需要设置，因为默认的异常处理好像有点问题！
+     *
      * @param exceptionHandler to replace the existing exceptionHandler.
      */
     public void setExceptionHandler(final ExceptionHandler<? super T> exceptionHandler)
@@ -113,10 +125,13 @@ public final class BatchEventProcessor<T>
     @Override
     public void run()
     {
+        // 检查并更新状态为开始运行！CAS操作！
         if (running.compareAndSet(IDLE, RUNNING))
         {
+            // 清理中断标识
             sequenceBarrier.clearAlert();
 
+            // 如果用户实现的EventHandler继承了LifecycleAware，则执行其onStart方法
             notifyStart();
             try
             {
@@ -127,6 +142,7 @@ public final class BatchEventProcessor<T>
             }
             finally
             {
+                // 如果用户实现的EventHandler继承了LifecycleAware，则执行其onShutdown方法
                 notifyShutdown();
                 running.set(IDLE);
             }
@@ -150,12 +166,15 @@ public final class BatchEventProcessor<T>
     private void processEvents()
     {
         T event = null;
+        // sequence初始值为-1，设计上当前值是已经消费过的
         long nextSequence = sequence.get() + 1L;
 
         while (true)
         {
             try
             {
+                // 获取当前可以消费的最大sequence（只要某个消费者获取到了availableSequence，
+                // 就代表其可以安全的消费这些event了！）
                 final long availableSequence = sequenceBarrier.waitFor(nextSequence);
                 if (batchStartAware != null)
                 {
@@ -164,19 +183,23 @@ public final class BatchEventProcessor<T>
 
                 while (nextSequence <= availableSequence)
                 {
+                    // 获取并处理
                     event = dataProvider.get(nextSequence);
                     eventHandler.onEvent(event, nextSequence, nextSequence == availableSequence);
                     nextSequence++;
                 }
 
+                // 设置本消费者当前的sequence，注意，出现异常需要特殊处理，防止重复消费
                 sequence.set(availableSequence);
             }
             catch (final TimeoutException e)
             {
+                // wait超时异常
                 notifyTimeout(sequence.get());
             }
             catch (final AlertException ex)
             {
+                // 中断异常
                 if (running.get() != RUNNING)
                 {
                     break;
@@ -185,6 +208,7 @@ public final class BatchEventProcessor<T>
             catch (final Throwable ex)
             {
                 exceptionHandler.handleEventException(ex, nextSequence, event);
+                // 如果出现异常，则设置为nextSequence
                 sequence.set(nextSequence);
                 nextSequence++;
             }

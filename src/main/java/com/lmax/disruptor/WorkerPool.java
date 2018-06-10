@@ -24,6 +24,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * WorkerPool contains a pool of {@link WorkProcessor}s that will consume sequences so jobs can be farmed out across a pool of workers.
  * Each of the {@link WorkProcessor}s manage and calls a {@link WorkHandler} to process the events.
  *
+ * 多个WorkerProcessor可以组成一个WorkerPool
+ * workHandlers[i]共享同一个workSequence，所以，同一个WorkerPool内，是互斥消费。
+ *
  * @param <T> event to be processed by a pool of workers
  */
 public final class WorkerPool<T>

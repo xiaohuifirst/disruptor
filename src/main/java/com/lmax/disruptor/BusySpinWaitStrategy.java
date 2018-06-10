@@ -23,6 +23,7 @@ import com.lmax.disruptor.util.ThreadHints;
  * <p>
  * This strategy will use CPU resource to avoid syscalls which can introduce latency jitter.  It is best
  * used when threads can be bound to specific CPU cores.
+ * 一种延迟最低，最耗CPU的策略。通常用于消费线程数小于CPU数的场景。
  */
 public final class BusySpinWaitStrategy implements WaitStrategy
 {
@@ -33,6 +34,7 @@ public final class BusySpinWaitStrategy implements WaitStrategy
     {
         long availableSequence;
 
+        // 一直while自旋检查
         while ((availableSequence = dependentSequence.get()) < sequence)
         {
             barrier.checkAlert();

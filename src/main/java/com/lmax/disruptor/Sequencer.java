@@ -17,6 +17,11 @@ package com.lmax.disruptor;
 
 /**
  * Coordinates claiming sequences for access to a data structure while tracking dependent {@link Sequence}s
+ * 扩展了Cursored和Sequenced接口。在前两者的基础上，增加了与消费、生产相关的方法。
+ * RingBuffer的头由一个名字为 cursor 的 Sequence 对象维护，用来协调生产者向RingBuffer中填充数据。
+ * 表示队列尾的Sequence并没有在RingBuffer中，而是由消费者维护。
+ * 这样的话，队列尾的维护就是无锁的。但是在生产者方确定RingBuffer是否已满就需要跟踪更多信息。
+ * 为此，GatingSequence用来跟踪相关Sequence（消费者方更新，生产者使用！）
  */
 public interface Sequencer extends Cursored, Sequenced
 {
@@ -28,6 +33,7 @@ public interface Sequencer extends Cursored, Sequenced
     /**
      * Claim a specific sequence.  Only used if initialising the ring buffer to
      * a specific value.
+     * 一般是多个生产者时才会使用
      *
      * @param sequence The sequence to initialise too.
      */
@@ -35,6 +41,7 @@ public interface Sequencer extends Cursored, Sequenced
 
     /**
      * Confirms if a sequence is published and the event is available for use; non-blocking.
+     * 消费者使用！
      *
      * @param sequence of the buffer to check
      * @return true if the sequence is available for use, false if not
@@ -44,6 +51,7 @@ public interface Sequencer extends Cursored, Sequenced
     /**
      * Add the specified gating sequences to this instance of the Disruptor.  They will
      * safely and atomically added to the list of gating sequences.
+     * 将这些sequence加入到需要跟踪处理的gatingSequences中
      *
      * @param gatingSequences The sequences to add.
      */
@@ -60,6 +68,8 @@ public interface Sequencer extends Cursored, Sequenced
     /**
      * Create a new SequenceBarrier to be used by an EventProcessor to track which messages
      * are available to be read from the ring buffer given a list of sequences to track.
+     * 给定一串需要跟踪的sequence，创建SequenceBarrier。
+     * SequenceBarrier是用来给多消费者确定消费位置是否可以消费用的
      *
      * @param sequencesToTrack All of the sequences that the newly constructed barrier will wait on.
      * @return A sequence barrier that will track the specified sequences.
