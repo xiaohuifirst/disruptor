@@ -133,9 +133,11 @@ public final class WorkProcessor<T>
                         sequence.set(nextSequence - 1L);
                     }
                     // 多个WorkProcessor之间，如果共享一个workSequence，那么，可以实现互斥消费，因为只有一个线程可以CAS更新成功
+                    // 先抢占到下一个，当前workSequence在nextSequence上
                     while (!workSequence.compareAndSet(nextSequence - 1L, nextSequence));
                 }
 
+                // 判断当前可消费的sequence是否大于nextSequence，如果大于，则进行消费处理（此时光标还在nextSequence上）
                 if (cachedAvailableSequence >= nextSequence)
                 {
                     event = ringBuffer.get(nextSequence);

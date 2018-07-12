@@ -25,18 +25,15 @@ import com.lmax.disruptor.util.ThreadHints;
  * used when threads can be bound to specific CPU cores.
  * 一种延迟最低，最耗CPU的策略。通常用于消费线程数小于CPU数的场景。
  */
-public final class BusySpinWaitStrategy implements WaitStrategy
-{
+public final class BusySpinWaitStrategy implements WaitStrategy {
     @Override
     public long waitFor(
-        final long sequence, Sequence cursor, final Sequence dependentSequence, final SequenceBarrier barrier)
-        throws AlertException, InterruptedException
-    {
+            final long sequence, Sequence cursor, final Sequence dependentSequence, final SequenceBarrier barrier)
+            throws AlertException, InterruptedException {
         long availableSequence;
 
         // 一直while自旋检查
-        while ((availableSequence = dependentSequence.get()) < sequence)
-        {
+        while ((availableSequence = dependentSequence.get()) < sequence) {
             barrier.checkAlert();
             ThreadHints.onSpinWait();
         }
@@ -45,7 +42,6 @@ public final class BusySpinWaitStrategy implements WaitStrategy
     }
 
     @Override
-    public void signalAllWhenBlocking()
-    {
+    public void signalAllWhenBlocking() {
     }
 }
